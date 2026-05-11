@@ -2,8 +2,9 @@
 
 ## 1. Reproducibility
 
-The solution was tested locally with Python 3 on Windows.
+The solution was tested locally on Windows with Python 3.
 
+Run from a clean checkout:
 
 ```bash
 python -m venv .venv
@@ -12,63 +13,106 @@ pip install -r requirements.txt
 python applicant_solution.py
 ```
 
+The script downloads `challenge.mat` if needed, runs the baseline and my method, and writes `results.json`.
+
+The repository contains:
+
+```text
+applicant_solution.py
+task_and_baseline.py
+results.json
+requirements.txt
+SOLUTION.md
+```
+
+I did not modify `task_and_baseline.py` or the dataset.
 
 ## 2. Task understanding
 
-The task is interference cancellation in complex multichannel signals. The dataset contains 6 complex transmit channels and 4 complex receive channels. The received signal is affected by structured interference caused by the transmitter chain and by an additional spatially coherent external component.
+This task is interference cancellation in complex multichannel signals.
 
-The target output has the same shape as the input RX signal. The method should subtract the estimated interference while preserving the remaining received signal structure.
+The project README states: “This is a real-world problem. The data comes from actual hardware measurements.”
 
-The quality metric is computed in a limited frequency band where the interference is concentrated. Therefore, a simple band-zeroing approach is not appropriate: the removed component should be physically interpretable as a TX-driven nonlinear interference component and/or a spatially coherent residual component.
+The received signal is modeled as:
+
+```text
+rx = s + I + eta
+```
+
+where `s` is the desired signal, `I` is structured interference, and `eta` is background noise.
+
+The important physical point is that the interference is not arbitrary. According to the task statement, it has two components:
+
+```text
+I = F_c(TX) + E
+```
+
+Here `F_c(TX)` is a nonlinear TX-driven component, while `E` is an external spatially coherent component observed across the four RX channels.
+
+This interpretation was the main reason for choosing a conservative signal-processing solution rather than direct spectral suppression. The README also notes that a valid removed component must be explainable as “a TX-driven nonlinear component” plus “a spatially coherent rank-1 component”.
 
 ## 3. Baseline
 
-The provided baseline uses a physically motivated model of TX-driven nonlinear interference. It builds nonlinear features from the TX channels, including cubic intermodulation-like terms of the form:
+The provided baseline is physically meaningful. It constructs nonlinear TX-derived features, including cubic intermodulation-like terms:
 
 ```text
 x_i^2 * conj(x_j)
 ```
 
-Several time lags are used for these nonlinear features. A regularized linear model is then fitted to predict the interference component in each RX channel. The predicted TX-driven interference is subtracted from the received signal.
+These terms are consistent with a nonlinear leakage model: products between different transmit channels can generate structured components in the receive band. The baseline then fits a regularized linear model with time lags and subtracts the predicted TX-driven interference from each RX channel.
 
-In my local run, the provided baseline produced the following result:
+My local baseline result was:
 
 ```text
-  ch0: 3.98 dB
-  ch1: 4.86 dB
-  ch2: 3.49 dB
-  ch3: 3.74 dB
-  Metric [baseline]: 4.02 dB
+ch0: 3.98 dB
+ch1: 4.86 dB
+ch2: 3.49 dB
+ch3: 3.74 dB
+average: 4.02 dB
 ```
 
 ## 4. Final approach
 
-The final method uses two stages.
+The final solution has two stages.
 
-The first stage is the provided physically motivated TX-driven nonlinear cancellation model. It predicts the part of the interference that can be explained by nonlinear functions of the TX channels and subtracts it from RX.
+First, I use the provided TX-driven nonlinear cancellation model. This removes the component of interference that is explainable by nonlinear functions of the transmitted signals.
 
-The second stage is a conservative spatial rank-1 residual cancellation. After the TX-driven cancellation, the residual is filtered with the same scoring-band filter. Then the dominant spatially coherent component across the four RX channels is estimated using an eigenvalue decomposition of the RX-channel covariance matrix in the scoring band. A scaled version of this rank-1 component is subtracted from the residual.
+Second, I add a conservative spatial rank-1 residual cancellation stage. After baseline subtraction, I apply the scoring-band filter to the residual, estimate the dominant spatial component across the four RX channels using eigenvalue decomposition of the RX-channel covariance matrix, and subtract only a scaled part of this component.
 
-The final output is:
+The final model is:
 
 ```text
 rx_hat = rx - tx_pred - alpha * rank1_pred
 ```
 
-where `tx_pred` is the TX-driven nonlinear interference prediction, `rank1_pred` is the estimated dominant spatially coherent residual component, and `alpha` is a conservative subtraction coefficient.
+where:
 
-For the submitted run I used:
+```text
+tx_pred      = TX-driven nonlinear interference estimate
+rank1_pred   = dominant spatially coherent residual component
+alpha        = conservative subtraction coefficient
+```
+
+For the submitted result I used:
 
 ```text
 alpha = 0.25
 ```
 
-This value was chosen as a conservative setting: it improved the metric while avoiding an overly aggressive residual subtraction.
+This value was selected because it improved all four channels while keeping the rank-1 subtraction weak enough to remain physically interpretable.
 
 ## 5. Implementation details
 
+The implementation is in:
+
 ```text
 applicant_solution.py
+```
+
+The main entry point remains:
+
+```text
+python applicant_solution.py
 ```
 
 The main function is:
@@ -77,19 +121,19 @@ The main function is:
 your_canceller(tx_n, rx)
 ```
 
+I also changed dataset loading to avoid repeated downloads and to avoid relying on the deprecated `fuzzy=True` argument in recent versions of `gdown`.
+
 ## 6. Experiments
 
-I first verified that the original baseline runs correctly and produces `results.json`.
+Due to the short time before submission, I focused on a small number of physically motivated experiments rather than a broad hyperparameter search.
 
-Then I added a spatial rank-1 residual cancellation stage after the baseline. The first tested conservative setting was:
+The baseline gave:
 
 ```text
-alpha = 0.25
+average: 4.02 dB
 ```
 
-This setting improved the average metric from 4.02 dB to 5.13 dB.
-
-The resulting per-channel metrics were:
+Adding the conservative rank-1 stage with `alpha = 0.25` gave:
 
 ```text
 ch0: 5.28 dB
@@ -99,25 +143,29 @@ ch3: 4.56 dB
 average: 5.13 dB
 ```
 
-The improvement was consistent across all four RX channels.
+The improvement over baseline was:
+
+```text
++1.11 dB average
+```
+
+The improvement was positive for all four RX channels.
 
 ## 7. Failed or postponed attempts
 
-I considered trying stronger rank-1 subtraction coefficients such as `alpha = 0.50`, `0.75`, and `1.00`. However, rank-1 subtraction must be used carefully: if the removed component becomes too aggressive or insufficiently explainable, the solution may fail the validity check.
+I considered testing stronger rank-1 subtraction values such as:
 
-Because of the submission time constraint, I selected the conservative `alpha = 0.25` configuration that already improved all four channels while keeping the method simple and interpretable.
+```text
+alpha = 0.50, 0.75, 1.00
+```
 
-Further work could include a more systematic sweep of `alpha`, validation of the rank-1 residual energy, and comparison of full-band versus scoring-band rank-1 estimation.
+I did not include them in the final submission because the task contains an explainability validity check. Aggressive residual subtraction could improve the numerical metric locally but become less defensible physically or fail validation.
+
+Under the submission time constraint, I chose the conservative version that already improves the baseline and directly follows the physical structure described in the task.
 
 ## 8. Final result
 
-The final result is stored in:
-
-```text
-results.json
-```
-
-Final submitted metric:
+The final metric stored in `results.json` is:
 
 ```text
 ch0: 5.28 dB
@@ -129,6 +177,4 @@ average_db = 5.13 dB
 
 ## 9. Limitations
 
-The solution is intentionally conservative. It improves the baseline by adding a physically interpretable spatial rank-1 residual cancellation stage, but it does not perform a large hyperparameter search or introduce more complex nonlinear models.
-
-A possible next improvement would be to tune the rank-1 subtraction strength more systematically and to test additional TX-derived nonlinear features while keeping the removed component compatible with the task validity constraints.
+This is a compact and conservative solution. It does not perform systematic parameter tuning or add new nonlinear TX features beyond the provided baseline. The next improvement would be a controlled sweep of the rank-1 coefficient and a deeper residual analysis, while preserving the physical explainability of the removed component.
