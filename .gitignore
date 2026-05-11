@@ -1,1 +1,6 @@
-challenge.mat
+challenge*.mat
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+.ipynb_checkpoints/
